@@ -1,0 +1,136 @@
+import os
+import asyncio
+import logging
+import aiohttp
+import re
+from datetime import datetime
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+
+logging.basicConfig(level=logging.INFO)
+
+# Получаем токен бота из переменных окружения
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWM_API_KEY = 'dda915c2496239ab81506eeb9d0159a6'
+
+if not BOT_TOKEN:
+    exit("Ошибка: Переменная окружения BOT_TOKEN не задана!")
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+@dp.message(Command("start", "help"))
+async def send_welcome(message: types.Message):
+    await message.reply(
+        "Привет! Напиши в группе `/weather город`.\n\n"
+        "✨ *Фишки:*\n"
+        "🏡 Для вашей деревни пиши: `/weather ачаки`\n"
+        "📍 Или координаты: `/weather 55.88,46.40`",
+        parse_mode="Markdown"
+    )
+
+@dp.message(Command("weather", "погода"))
+async def get_full_weather(message: types.Message):
+    command_args = message.text.split(maxsplit=1)
+    if len(command_args) < 2:
+        await message.reply("⚠️ Укажите город или координаты. Пример: `/weather Чебоксары`", parse_mode="Markdown")
+        return
+        
+    query = command_args[1].strip()
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    
+    coord_match = re.match(r'^(-?\d+\.\d+)\s*,\s*(-?\d+\.\d+)$', query)
+
+    if coord_match:
+        lat = coord_match.group(1)
+        lon = coord_match.group(2)
+        url_current = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={OWM_API_KEY}&units=metric&lang=ru"
+        url_forecast = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={OWM_API_KEY}&units=metric&lang=ru"
+        display_name = f"📍 Координаты ({lat}, {lon})"
+    elif "ачаки" in query.lower():
+        url_current = f"https://api.openweathermap.org/data/2.5/weather?lat=55.88&lon=46.40&appid={OWM_API_KEY}&units=metric&lang=ru"
+        url_forecast = f"https://api.openweathermap.org/data/2.5/forecast?lat=55.88&lon=46.40&appid={OWM_API_KEY}&units=metric&lang=ru"
+        display_name = "Верхние Ачаки 🏡"
+    else:
+        url_current = f"https://api.openweathermap.org/data/2.5/weather?q={query}&appid={OWM_API_KEY}&units=metric&lang=ru"
+        url_forecast = f"https://api.openweathermap.org/data/2.5/forecast?q={query}&appid={OWM_API_KEY}&units=metric&lang=ru"
+        display_name = None
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url_current, proxy=None) as resp_curr:
+                if resp_curr.status != 200:
+                    await message.reply(f"❌ Место '{query}' не найдено. Проверьте ввод.")
+                    return
+                data_curr = await resp_curr.json()
+            
+            async with session.get(url_forecast, proxy=None) as resp_fore:
+                if resp_fore.status != 200:
+                    await message.reply("❌ Не удалось加载 прогноз погоды.")
+                    return
+                data_fore = await resp_fore.json()
+            
+            if display_name and "📍" in display_name:
+                location_title = f"{display_name} ({data_curr.get('name', 'Окрестности')})"
+            else:
+                location_title = display_name if display_name else f"{data_curr['name']}, {data_curr['sys']['country']}"
+            
+            final_text = (
+                f"🌍 *Погода в: {location_title}*\n"
+                f"───\n"
+                f"🔴 *Сейчас:*\n"
+                f"🌡 Температура: {round(data_curr['main']['temp'])}°C (как {round(data_curr['main']['feels_like'])}°C)\n"
+                f"📝 {data_curr['weather'][0]['description'].capitalize()}\n"
+                f"💨 Ветер: {data_curr['wind']['speed']} м/с | 💧 Влажность: {data_curr['main']['humidity']}%\n"
+                f"───\n"
+                f"📅 *Прогноз на будущее:*\n"
+            )
+            
+            forecast_by_days = {}
+            months = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]
+            
+            for item in data_fore['list']:
+                dt_obj = datetime.strptime(item['dt_txt'], "%Y-%m-%d %H:%M:%S")
+                date_str = f"{dt_obj.day} {months[dt_obj.month - 1]}"
+                time_str = item['dt_txt'].split()[1]
+                
+                if date_str not in forecast_by_days:
+                    forecast_by_days[date_str] = []
+                
+                temp = round(item['main']['temp'])
+                desc = item['weather'][0]['description'].lower()
+                
+                if time_str == "06:00:00":
+                    forecast_by_days[date_str].append(f"🌅 Утро (07:00): {temp}°C, {desc}")
+                elif time_str == "12:00:00":
+                    forecast_by_days[date_str].append(f"☀️ День (13:00): {temp}°C, {desc}")
+                elif time_str == "18:00:00":
+                    forecast_by_days[date_str].append(f"🌆 Вечер (17:00): {temp}°C, {desc}")
+                elif time_str == "21:00:00":
+                    forecast_by_days[date_str].append(f"🌌 Ночь (21:00): {temp}°C, {desc}")
+
+            days_printed = 0
+            for day, periods in forecast_by_days.items():
+                if not periods:
+                    continue
+                    
+                final_text += f"\n📆 *{day}*:\n"
+                for period in periods:
+                    final_text += f" • {period}\n"
+                    
+                days_printed += 1
+                if days_printed == 3:
+                    break
+            
+            await message.reply(final_text, parse_mode="Markdown")
+            
+    except Exception as e:
+        await message.reply("Произошла ошибка при сборке данных.")
+        print(f"Ошибка комбо-запроса: {e}")
+
+async def main():
+    print("Бот готов к деплою на хостинг!")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
