@@ -9,7 +9,7 @@ from aiogram.filters import Command
 
 logging.basicConfig(level=logging.INFO)
 
-# Получаем токен бота из переменных окружения
+# GitHub не увидит твой токен, он подтянется из системы хостинга!
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWM_API_KEY = 'dda915c2496239ab81506eeb9d0159a6'
 
@@ -19,12 +19,34 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# Функция подбора эмодзи по коду погоды
+def get_weather_emoji(weather_id):
+    if 200 <= weather_id <= 232:
+        return "⛈"
+    elif 300 <= weather_id <= 321:
+        return "🌦"
+    elif 500 <= weather_id <= 531:
+        return "🌧"
+    elif 600 <= weather_id <= 622:
+        return "❄️"
+    elif 701 <= weather_id <= 781:
+        return "🌫"
+    elif weather_id == 800:
+        return "☀️"
+    elif weather_id == 801:
+        return "🌤"
+    elif weather_id == 802:
+        return "⛅️"
+    elif weather_id in [803, 804]:
+        return "☁️"
+    return "✨"
+
 @dp.message(Command("start", "help"))
 async def send_welcome(message: types.Message):
     await message.reply(
         "Привет! Напиши в группе `/weather город`.\n\n"
         "✨ *Фишки:*\n"
-        "🏡 Для вашей деревни пиши: `/weather ачаки`\n"
+        "🏡 Для вашей деревни пиши: `/weather ачаки` или `/weather achaki`\n"
         "📍 Или координаты: `/weather 55.88,46.40`",
         parse_mode="Markdown"
     )
@@ -47,7 +69,7 @@ async def get_full_weather(message: types.Message):
         url_current = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={OWM_API_KEY}&units=metric&lang=ru"
         url_forecast = f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}&appid={OWM_API_KEY}&units=metric&lang=ru"
         display_name = f"📍 Координаты ({lat}, {lon})"
-    elif "ачаки" in query.lower():
+    elif "ачаки" in query.lower() or "achaki" in query.lower():
         url_current = f"https://api.openweathermap.org/data/2.5/weather?lat=55.88&lon=46.40&appid={OWM_API_KEY}&units=metric&lang=ru"
         url_forecast = f"https://api.openweathermap.org/data/2.5/forecast?lat=55.88&lon=46.40&appid={OWM_API_KEY}&units=metric&lang=ru"
         display_name = "Верхние Ачаки 🏡"
@@ -66,7 +88,7 @@ async def get_full_weather(message: types.Message):
             
             async with session.get(url_forecast, proxy=None) as resp_fore:
                 if resp_fore.status != 200:
-                    await message.reply("❌ Не удалось加载 прогноз погоды.")
+                    await message.reply("❌ Не удалось загрузить прогноз погоды.")
                     return
                 data_fore = await resp_fore.json()
             
@@ -75,12 +97,14 @@ async def get_full_weather(message: types.Message):
             else:
                 location_title = display_name if display_name else f"{data_curr['name']}, {data_curr['sys']['country']}"
             
+            curr_emoji = get_weather_emoji(data_curr['weather'][0]['id'])
+            
             final_text = (
                 f"🌍 *Погода в: {location_title}*\n"
                 f"───\n"
                 f"🔴 *Сейчас:*\n"
                 f"🌡 Температура: {round(data_curr['main']['temp'])}°C (как {round(data_curr['main']['feels_like'])}°C)\n"
-                f"📝 {data_curr['weather'][0]['description'].capitalize()}\n"
+                f"📝 {curr_emoji} {data_curr['weather'][0]['description'].capitalize()}\n"
                 f"💨 Ветер: {data_curr['wind']['speed']} м/с | 💧 Влажность: {data_curr['main']['humidity']}%\n"
                 f"───\n"
                 f"📅 *Прогноз на будущее:*\n"
@@ -99,15 +123,16 @@ async def get_full_weather(message: types.Message):
                 
                 temp = round(item['main']['temp'])
                 desc = item['weather'][0]['description'].lower()
+                fore_emoji = get_weather_emoji(item['weather'][0]['id'])
                 
                 if time_str == "06:00:00":
-                    forecast_by_days[date_str].append(f"🌅 Утро (07:00): {temp}°C, {desc}")
+                    forecast_by_days[date_str].append(f"🌅 Утро (07:00): {temp}°C, {fore_emoji} {desc}")
                 elif time_str == "12:00:00":
-                    forecast_by_days[date_str].append(f"☀️ День (13:00): {temp}°C, {desc}")
+                    forecast_by_days[date_str].append(f"☀️ День (13:00): {temp}°C, {fore_emoji} {desc}")
                 elif time_str == "18:00:00":
-                    forecast_by_days[date_str].append(f"🌆 Вечер (17:00): {temp}°C, {desc}")
+                    forecast_by_days[date_str].append(f"🌆 Вечер (17:00): {temp}°C, {fore_emoji} {desc}")
                 elif time_str == "21:00:00":
-                    forecast_by_days[date_str].append(f"🌌 Ночь (21:00): {temp}°C, {desc}")
+                    forecast_by_days[date_str].append(f"🌌 Ночь (21:00): {temp}°C, {fore_emoji} {desc}")
 
             days_printed = 0
             for day, periods in forecast_by_days.items():
@@ -129,7 +154,7 @@ async def get_full_weather(message: types.Message):
         print(f"Ошибка комбо-запроса: {e}")
 
 async def main():
-    print("Бот готов к деплою на хостинг!")
+    print("Бот защищен и готов к отправке на GitHub!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
