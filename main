@@ -5,8 +5,9 @@ import re
 import aiohttp
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
+from telethon.sessions import StringSession
+from telethon.network.connection import ConnectionTcpAbridged
 
-# Загружаем переменные из файла .env
 load_dotenv()
 
 logging.basicConfig(
@@ -14,27 +15,21 @@ logging.basicConfig(
     level=logging.WARNING
 )
 
-# ==========================================
-#         ПОЛУЧЕНИЕ ДАННЫХ ИЗ ОКРУЖЕНИЯ
-# ==========================================
+# Чтение переменных окружения
 API_ID = os.getenv('API_ID')
 API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
+SESSION_STRING = os.getenv('SESSION_STRING')
 
-# Проверка, что секреты заданы
-if not all([API_ID, API_HASH, BOT_TOKEN]):
-    raise ValueError("ОШИБКА: API_ID, API_HASH или BOT_TOKEN не найдены в файле .env или переменных окружения!")
+if not all([API_ID, API_HASH, BOT_TOKEN, SESSION_STRING]):
+    raise ValueError("ОШИБКА: Проверьте переменные окружения (API_ID, API_HASH, BOT_TOKEN, SESSION_STRING)!")
 
 API_ID = int(API_ID)
 
-# Каналы
 SOURCE_CHANNEL = 'Rashanova21'
 TARGET_CHANNEL = '@Radat21'
 RADAR_CHANNEL_LINK = 'https://t.me/Radat21'
 
-# ==========================================
-#              БАЗЫ ФИЛЬТРАЦИИ
-# ==========================================
 ALERT_KEYWORDS = [
     'фиксаци', 'зафиксирован', 'зафиксированн', 'засекли', 'засек', 
     'обнаружен', 'обнаружени', 'замечен', 'наблюдает', 'направлени', 'курс на',
@@ -44,55 +39,43 @@ ALERT_KEYWORDS = [
 ]
 
 ALLOWED_REGIONS = [
-    # Трассы
     'м-7', 'м7', 'м-12', 'м12', 'а-151', 'а151', 'р-178', 'р178',
-    # Чувашия
     'чуваш', 'чебоксар', 'новочебоксар', 'канаш', 'алатыр', 'шумерл', 'цивильск',
     'кугес', 'батырев', 'ибрес', 'умар', 'ямбулат', 'козловк', 'мариинский посад',
     'ядрин', 'порецк', 'комсомольск', 'шемурш', 'красноармейск', 'красные четаи', 'аликов',
-    # Нижегородская область
     'нижегород', 'нижний новгород', 'дзержинск', 'арзамас', 'саров', 'кстов', 
     'бор', 'павлов', 'выкс', 'балахн', 'заволжь', 'богородск', 'кулебак', 
     'городец', 'семенов', 'лысков', 'сергач', 'шахунь', 'навашин', 'лукоянов',
-    # Ульяновская область
     'ульяновск', 'димитровград', 'инз', 'барыш', 'новоульяновск', 'сенгилей', 
     'чердаклы', 'ишеевк', 'кузоватов', 'карсун', 'майн', 'николаевк', 'сурск',
-    # Мордовия
     'мордови', 'саранск', 'рузаевк', 'ковылкин', 'комсомольск', 'зубова полян', 
     'краснослободск', 'чамзинк', 'ардатов', 'торбеев', 'лямбир', 'инсар',
-    # Саратовская область
     'саратов', 'энгельс', 'балаков', 'балашов', 'вольск', 'пугачев', 'ртищев', 
     'маркс', 'петровск', 'аткарск', 'красноармейск', 'ершов', 'калининск',
-    # Татарстан
     'татарстан', 'казан', 'набережные челн', 'нижнекамск', 'альметьевск', 
     'зеленодольск', 'бугульм', 'елабуг', 'лениногорск', 'чистопол', 'заинск'
 ]
 
 JUNK_PHRASES = [
-    r'наш канал',
-    r'подпишись на канал',
-    r'подписывайся',
-    r'ссылка в описании',
-    r'источник:',
-    r'читать далее',
-    r'подробнее тут',
-    r'срочные новости в'
+    r'наш канал', r'подпишись на канал', r'подписывайся',
+    r'ссылка в описании', r'источник:', r'читать далее', r'подробнее тут'
 ]
 
+# Авторизация по сохраненной строке сессии без запроса телефона
 client = TelegramClient(
-    'session_radar',
+    StringSession(SESSION_STRING),
     API_ID,
     API_HASH,
+    connection=ConnectionTcpAbridged,
     connection_retries=None,
     retry_delay=3,
     auto_reconnect=True,
-    timeout=15
+    timeout=20
 )
 
 def clean_and_check(text: str) -> str | None:
     if not text:
         return None
-    
     text_lower = text.lower()
 
     has_number_tag = bool(re.search(r'(?:№\s*\d+|#\s*\d+|борт\s*\d+|цель\s*\d+)', text_lower))
@@ -112,30 +95,21 @@ def clean_and_check(text: str) -> str | None:
 
     lines = [re.sub(r'[ \t]+', ' ', line).strip() for line in text.split('\n')]
     cleaned_text = '\n'.join([line for line in lines if line]).strip()
-
     return cleaned_text if cleaned_text else None
 
 async def send_via_bot(text: str, media_path: str = None, is_video: bool = False):
     final_text = f"{text}\n\n<a href=\"{RADAR_CHANNEL_LINK}\">Радар Чувашии</a>"
-    
     async with aiohttp.ClientSession() as session:
         if media_path and os.path.exists(media_path):
             method = "sendVideo" if is_video else "sendPhoto"
             field_name = "video" if is_video else "photo"
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
-            
             data = aiohttp.FormData()
             data.add_field("chat_id", TARGET_CHANNEL)
             data.add_field("caption", final_text)
             data.add_field("parse_mode", "HTML")
             data.add_field(field_name, open(media_path, "rb"))
-            
-            async with session.post(url, data=data) as resp:
-                if resp.status == 200:
-                    print("[✓] Пост с медиа успешно опубликован ботом!")
-                else:
-                    err = await resp.text()
-                    print(f"[!] Ошибка отправки медиа ботом: {err}")
+            await session.post(url, data=data)
         else:
             url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
             payload = {
@@ -144,47 +118,28 @@ async def send_via_bot(text: str, media_path: str = None, is_video: bool = False
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True
             }
-            async with session.post(url, json=payload) as resp:
-                if resp.status == 200:
-                    print("[✓] Текстовый пост успешно опубликован ботом!")
-                else:
-                    err = await resp.text()
-                    print(f"[!] Ошибка отправки ботом: {err}")
+            await session.post(url, json=payload)
 
 @client.on(events.NewMessage(chats=SOURCE_CHANNEL))
 async def handler(event):
     raw_text = event.message.message or ""
-    print(f"\n[+] Новое сообщение из @{SOURCE_CHANNEL} (ID: {event.message.id})")
-
     cleaned = clean_and_check(raw_text)
     if cleaned:
-        print("[*] Сообщение прошло проверку. Передаем боту...")
         media_path = None
         is_video = False
-
         try:
             if event.message.media:
                 media_path = await event.message.download_media(file="temp_media")
                 if event.message.video:
                     is_video = True
-            
             await send_via_bot(cleaned, media_path=media_path, is_video=is_video)
-
-        except Exception as e:
-            print(f"[!] Ошибка при обработке: {e}")
         finally:
             if media_path and os.path.exists(media_path):
                 os.remove(media_path)
-    else:
-        print("[-] Пропущено (не подошло под фильтр)")
 
 async def main():
     await client.start()
-    print("=" * 60)
-    print("Бот успешно запущен!")
-    print(f"Аккаунт мониторит: t.me/{SOURCE_CHANNEL}")
-    print(f"Бот отправляет посты в: {TARGET_CHANNEL}")
-    print("=" * 60)
+    print("Бот успешно запущен на сервере и начал мониторинг!")
     await client.run_until_disconnected()
 
 if __name__ == '__main__':
