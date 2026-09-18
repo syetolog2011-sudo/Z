@@ -1,67 +1,73 @@
-import logging
 import asyncio
+import logging
+import os
 import re
+import aiohttp
+from dotenv import load_dotenv
 from telethon import TelegramClient, events
+
+# Загружаем переменные из файла .env
+load_dotenv()
 
 logging.basicConfig(
     format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s',
     level=logging.WARNING
 )
 
-API_ID = 24781781
-API_HASH = '139a3921fcaad5a92579f03ade0111c5'
+# ==========================================
+#         ПОЛУЧЕНИЕ ДАННЫХ ИЗ ОКРУЖЕНИЯ
+# ==========================================
+API_ID = os.getenv('API_ID')
+API_HASH = os.getenv('API_HASH')
+BOT_TOKEN = os.getenv('BOT_TOKEN')
 
-SOURCE_CHANNEL = 'Kazan_BPLA_716'
-TARGET_CHANNEL = 'Radat21'
+# Проверка, что секреты заданы
+if not all([API_ID, API_HASH, BOT_TOKEN]):
+    raise ValueError("ОШИБКА: API_ID, API_HASH или BOT_TOKEN не найдены в файле .env или переменных окружения!")
+
+API_ID = int(API_ID)
+
+# Каналы
+SOURCE_CHANNEL = 'Rashanova21'
+TARGET_CHANNEL = '@Radat21'
 RADAR_CHANNEL_LINK = 'https://t.me/Radat21'
 
-# Ключевые слова: тревоги, атаки, ПВО и фиксация объектов
+# ==========================================
+#              БАЗЫ ФИЛЬТРАЦИИ
+# ==========================================
 ALERT_KEYWORDS = [
-    # Фиксация и наблюдение
-    'фиксаци', 'зафиксирован', 'зафиксированн', 'засекли', 'засек',
+    'фиксаци', 'зафиксирован', 'зафиксированн', 'засекли', 'засек', 
     'обнаружен', 'обнаружени', 'замечен', 'наблюдает', 'направлени', 'курс на',
-    # Типы угроз
-    'бпла', 'дрон', 'беспилотник', 'шахед', 'геран', 'ракета', 'цель', 'объект',
-    # Опасность и реагирование
+    'борт', 'бортовой', 'номер', 'позывн', 'цель', 'объект',
+    'бпла', 'дрон', 'беспилотник', 'шахед', 'геран', 'ракета',
     'тревог', 'сирен', 'опасност', 'атака', 'взрыв', 'пво', 'отбой', 'прилет', 'сбит'
 ]
 
-# Полная база городов и районов для всех 6 регионов
 ALLOWED_REGIONS = [
-    # --- ЧУВАШИЯ ---
+    # Трассы
+    'м-7', 'м7', 'м-12', 'м12', 'а-151', 'а151', 'р-178', 'р178',
+    # Чувашия
     'чуваш', 'чебоксар', 'новочебоксар', 'канаш', 'алатыр', 'шумерл', 'цивильск',
     'кугес', 'батырев', 'ибрес', 'умар', 'ямбулат', 'козловк', 'мариинский посад',
     'ядрин', 'порецк', 'комсомольск', 'шемурш', 'красноармейск', 'красные четаи', 'аликов',
-
-    # --- НИЖЕГОРОДСКАЯ ОБЛАСТЬ ---
-    'нижегород', 'нижний новгород', 'дзержинск', 'арзамас', 'саров', 'кстов',
-    'бор', 'павлов', 'выкс', 'балахн', 'заволжь', 'богородск', 'кулебак',
+    # Нижегородская область
+    'нижегород', 'нижний новгород', 'дзержинск', 'арзамас', 'саров', 'кстов', 
+    'бор', 'павлов', 'выкс', 'балахн', 'заволжь', 'богородск', 'кулебак', 
     'городец', 'семенов', 'лысков', 'сергач', 'шахунь', 'навашин', 'лукоянов',
-    'первомайск', 'чкаловск', 'ворсм', 'урен', 'володарск', 'ветлуг',
-
-    # --- УЛЬЯНОВСКАЯ ОБЛАСТЬ ---
-    'ульяновск', 'димитровград', 'инз', 'барыш', 'новоульяновск', 'сенгилей',
+    # Ульяновская область
+    'ульяновск', 'димитровград', 'инз', 'барыш', 'новоульяновск', 'сенгилей', 
     'чердаклы', 'ишеевк', 'кузоватов', 'карсун', 'майн', 'николаевк', 'сурск',
-    'старая кулатк', 'старая майн', 'тереньг', 'цильн', 'павловк',
-
-    # --- МОРДОВИЯ ---
-    'мордови', 'саранск', 'рузаевк', 'ковылкин', 'комсомольск', 'зубова полян',
+    # Мордовия
+    'мордови', 'саранск', 'рузаевк', 'ковылкин', 'комсомольск', 'зубова полян', 
     'краснослободск', 'чамзинк', 'ардатов', 'торбеев', 'лямбир', 'инсар',
-    'темников', 'большие березник', 'атяшев', 'дубенк', 'елник', 'атюрьев',
-
-    # --- САРАТОВСКАЯ ОБЛАСТЬ ---
-    'саратов', 'энгельс', 'балаков', 'балашов', 'вольск', 'пугачев', 'ртищев',
+    # Саратовская область
+    'саратов', 'энгельс', 'балаков', 'балашов', 'вольск', 'пугачев', 'ртищев', 
     'маркс', 'петровск', 'аткарск', 'красноармейск', 'ершов', 'калининск',
-    'новоузенск', 'красный кут', 'хвалынск', 'аркадак', 'степное', 'светлый',
-
-    # --- ТАТАРСТАН ---
-    'татарстан', 'казан', 'набережные челн', 'нижнекамск', 'альметьевск',
-    'зеленодольск', 'бугульм', 'елабуг', 'лениногорск', 'чистопол',
-    'заинск', 'азнакаев', 'нурлат', 'бавл', 'менделеевск', 'буинск', 'арск',
-    'агрыз', 'кукмор', 'васильев', 'иннополис', 'мамадыш', 'лаишев', 'тетюш'
+    # Татарстан
+    'татарстан', 'казан', 'набережные челн', 'нижнекамск', 'альметьевск', 
+    'зеленодольск', 'бугульм', 'елабуг', 'лениногорск', 'чистопол', 'заинск'
 ]
 
-# Фразы, которые вырезаются из текста
 JUNK_PHRASES = [
     r'наш канал',
     r'подпишись на канал',
@@ -83,79 +89,103 @@ client = TelegramClient(
     timeout=15
 )
 
-
 def clean_and_check(text: str) -> str | None:
     if not text:
         return None
-
+    
     text_lower = text.lower()
 
-    # 1. Проверяем наличие маркера тревоги / угрозы / фиксации
-    if not any(alert in text_lower for alert in ALERT_KEYWORDS):
+    has_number_tag = bool(re.search(r'(?:№\s*\d+|#\s*\d+|борт\s*\d+|цель\s*\d+)', text_lower))
+    has_alert_word = any(alert in text_lower for alert in ALERT_KEYWORDS)
+    if not (has_alert_word or has_number_tag):
         return None
 
-    # 2. Проверяем географическую привязку
     if not any(place in text_lower for place in ALLOWED_REGIONS):
         return None
 
-    # 3. Удаляем веб-ссылки
     text = re.sub(r'https?://\S+|www\.\S+|t\.me/\S+', '', text, flags=re.IGNORECASE)
-
-    # 4. Удаляем юзернеймы
     text = re.sub(r'@[a-zA-Z0-9_]+', '', text)
+    text = re.sub(r'(\+7|8)[\s\-\(]*\d{3}[\s\-\)]*\d{3}[\s\-]?\d{2}[\s\-]?\d{2}', '', text)
 
-    # 5. Вырезаем мусорные фразы
     for phrase in JUNK_PHRASES:
         text = re.sub(phrase, '', text, flags=re.IGNORECASE)
 
-    # 6. Очищаем пробелы и пустые строки
     lines = [re.sub(r'[ \t]+', ' ', line).strip() for line in text.split('\n')]
     cleaned_text = '\n'.join([line for line in lines if line]).strip()
 
     return cleaned_text if cleaned_text else None
 
+async def send_via_bot(text: str, media_path: str = None, is_video: bool = False):
+    final_text = f"{text}\n\n<a href=\"{RADAR_CHANNEL_LINK}\">Радар Чувашии</a>"
+    
+    async with aiohttp.ClientSession() as session:
+        if media_path and os.path.exists(media_path):
+            method = "sendVideo" if is_video else "sendPhoto"
+            field_name = "video" if is_video else "photo"
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+            
+            data = aiohttp.FormData()
+            data.add_field("chat_id", TARGET_CHANNEL)
+            data.add_field("caption", final_text)
+            data.add_field("parse_mode", "HTML")
+            data.add_field(field_name, open(media_path, "rb"))
+            
+            async with session.post(url, data=data) as resp:
+                if resp.status == 200:
+                    print("[✓] Пост с медиа успешно опубликован ботом!")
+                else:
+                    err = await resp.text()
+                    print(f"[!] Ошибка отправки медиа ботом: {err}")
+        else:
+            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+            payload = {
+                "chat_id": TARGET_CHANNEL,
+                "text": final_text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True
+            }
+            async with session.post(url, json=payload) as resp:
+                if resp.status == 200:
+                    print("[✓] Текстовый пост успешно опубликован ботом!")
+                else:
+                    err = await resp.text()
+                    print(f"[!] Ошибка отправки ботом: {err}")
 
 @client.on(events.NewMessage(chats=SOURCE_CHANNEL))
 async def handler(event):
     raw_text = event.message.message or ""
-    print(f"\n[+] Сообщение из @{SOURCE_CHANNEL} (ID: {event.message.id})")
+    print(f"\n[+] Новое сообщение из @{SOURCE_CHANNEL} (ID: {event.message.id})")
 
-    processed_text = clean_and_check(raw_text)
-
-    if processed_text:
-        print("[*] Зафиксировано совпадение (цель/фиксация + регион). Отправка в @Radat21...")
-        final_text = f"{processed_text}\n\n[Радар Чувашии]({RADAR_CHANNEL_LINK})"
+    cleaned = clean_and_check(raw_text)
+    if cleaned:
+        print("[*] Сообщение прошло проверку. Передаем боту...")
+        media_path = None
+        is_video = False
 
         try:
             if event.message.media:
-                await client.send_file(
-                    TARGET_CHANNEL,
-                    event.message.media,
-                    caption=final_text,
-                    parse_mode='md'
-                )
-            else:
-                await client.send_message(
-                    TARGET_CHANNEL,
-                    final_text,
-                    parse_mode='md'
-                )
-            print("[✓] Опубликовано!")
-        except Exception as err:
-            print(f"[!] Ошибка отправки: {err}")
-    else:
-        print("[-] Пропущено (нет фиксации/угрозы или нужного населенного пункта)")
+                media_path = await event.message.download_media(file="temp_media")
+                if event.message.video:
+                    is_video = True
+            
+            await send_via_bot(cleaned, media_path=media_path, is_video=is_video)
 
+        except Exception as e:
+            print(f"[!] Ошибка при обработке: {e}")
+        finally:
+            if media_path and os.path.exists(media_path):
+                os.remove(media_path)
+    else:
+        print("[-] Пропущено (не подошло под фильтр)")
 
 async def main():
     await client.start()
-    print("=" * 45)
-    print("Бот запущен. Мониторинг фиксаций и угроз активен!")
-    print(f"Источник: t.me/{SOURCE_CHANNEL}")
-    print(f"Цель: t.me/{TARGET_CHANNEL}")
-    print("=" * 45)
+    print("=" * 60)
+    print("Бот успешно запущен!")
+    print(f"Аккаунт мониторит: t.me/{SOURCE_CHANNEL}")
+    print(f"Бот отправляет посты в: {TARGET_CHANNEL}")
+    print("=" * 60)
     await client.run_until_disconnected()
-
 
 if __name__ == '__main__':
     asyncio.run(main())
